@@ -1,0 +1,62 @@
+name: Build Cudy MOD+ selfheal
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "patches/cudy-tr3000-selfheal.patch"
+      - ".github/workflows/build-cudy-selfheal.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Checkout frozen Forkop MOD source
+        run: |
+          git clone https://github.com/Gavr1024/forkop-mod.git src
+          cd src
+          git checkout a2810b4da3e75775ac05778e7e53f57804b3e60c
+          git apply ../patches/cudy-tr3000-selfheal.patch
+
+      - name: Verify MOD+ fixes in source
+        run: |
+          grep -F "Forkop MOD+ Cudy FIX-00" src/forkop/files/usr/lib/singbox/runtime.uc
+          grep -F "Forkop MOD+ Cudy TR3000 FIX-01" src/forkop/files/usr/lib/singbox/generator.uc
+          grep -F 'service_state_success([ "mark-pending-reload", PENDING_RELOAD_FILE, "local_list_cache" ])' src/forkop/files/usr/lib/components/updates.uc
+          grep -F "Forkop MOD+" src/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential fakeroot file gawk git patch perl tar unzip util-linux xz-utils zstd curl
+
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare -r true
+
+      - name: Build frozen packages
+        working-directory: src
+        env:
+          APK_SDK_URL: https://downloads.openwrt.org/releases/25.12.5/targets/x86/64/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+        run: |
+          chmod +x build.sh
+          ./build.sh 1.0.7 dist/cudy-selfheal
+
+      - name: Checksums
+        working-directory: src/dist/cudy-selfheal
+        run: sha256sum *.apk *.ipk > SHA256SUMS
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: forkop-modplus-cudy-1.0.7-selfheal
+          path: |
+            src/dist/cudy-selfheal/*.apk
+            src/dist/cudy-selfheal/*.ipk
+            src/dist/cudy-selfheal/SHA256SUMS
+          if-no-files-found: error
