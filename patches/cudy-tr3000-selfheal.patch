@@ -1,0 +1,128 @@
+diff --git a/forkop/files/usr/lib/components/updates.uc b/forkop/files/usr/lib/components/updates.uc
+index 0824b82..e5f9be1 100644
+--- a/forkop/files/usr/lib/components/updates.uc
++++ b/forkop/files/usr/lib/components/updates.uc
+@@ -2532,7 +2532,7 @@ function list_update() {
+             if (!persist_result.ok)
+                 ok = false;
+             if (persist_result.changed) {
+-                mark_pending_reload("local_list_cache");
++                service_state_success([ "mark-pending-reload", PENDING_RELOAD_FILE, "local_list_cache" ]);
+             }
+         }
+         else if (!persist_result) {
+diff --git a/forkop/files/usr/lib/singbox/generator.uc b/forkop/files/usr/lib/singbox/generator.uc
+index 520fa41..e30080f 100644
+--- a/forkop/files/usr/lib/singbox/generator.uc
++++ b/forkop/files/usr/lib/singbox/generator.uc
+@@ -894,6 +894,19 @@ function add_subscription_source_with_state(config, section, source_index, sourc
+         return 0;
+ 
+     let source_outbounds = runtime_subscription.read_source_outbounds(source_section);
++
++    /* Forkop MOD+ Cudy TR3000 FIX-01: strip Xray-only Reality fields before sing-box validation. */
++    for (let source_outbound in source_outbounds) {
++        if (type(source_outbound) != "object")
++            continue;
++        if (type(source_outbound.tls) != "object")
++            continue;
++        if (type(source_outbound.tls.reality) != "object")
++            continue;
++
++        delete source_outbound.tls.reality.spider_x;
++        delete source_outbound.tls.reality.spiderX;
++    }
+     if (length(source_outbounds) == 0)
+         return 0;
+ 
+diff --git a/forkop/files/usr/lib/singbox/runtime.uc b/forkop/files/usr/lib/singbox/runtime.uc
+index ffccd5c..305e71d 100644
+--- a/forkop/files/usr/lib/singbox/runtime.uc
++++ b/forkop/files/usr/lib/singbox/runtime.uc
+@@ -38,6 +38,7 @@ const SB_SERVICE_MIXED_INBOUND_PORT = getenv("SB_SERVICE_MIXED_INBOUND_PORT") ||
+ const SB_VARIANT_STATE_FILE = getenv("SB_VARIANT_STATE_FILE") || "/etc/forkop/sing-box-variant";
+ const SB_VERSION_STATE_FILE = getenv("SB_VERSION_STATE_FILE") || "/etc/forkop/sing-box-version";
+ const SB_MANAGED_SERVICE_MARKER = getenv("SB_MANAGED_SERVICE_MARKER") || "Forkop managed sing-box service for binary variants";
++const SB_UCI_CONFIG_FILE = getenv("SB_UCI_CONFIG_FILE") || "/etc/config/sing-box";
+ 
+ function as_string(value) {
+     return value == null ? "" : "" + value;
+@@ -364,6 +365,28 @@ function uci_get_option(config, section, key) {
+ }
+ 
+ function ensure_sing_box_main_section() {
++    if (uci_core.exists("sing-box.main"))
++        return true;
++
++    /* Forkop MOD+ Cudy FIX-00: uci_core cannot always create a new
++     * package file from scratch on OpenWrt 25.12.  Seed the minimal
++     * sing-box UCI config when the sidecar is present but its package
++     * config is missing.  Existing user configuration is never overwritten. */
++    if (!file_exists(SB_UCI_CONFIG_FILE)) {
++        let default_config =
++            "config sing-box 'main'\n" +
++            "option enabled '0'\n" +
++            "option user 'root'\n" +
++            "option conffile '/etc/sing-box/config.json'\n" +
++            "option workdir '/usr/share/sing-box'\n" +
++            "option log_stderr '1'\n";
++        if (!write_file(SB_UCI_CONFIG_FILE, default_config))
++            return false;
++        command_success_from_args([ "chmod", "0600", SB_UCI_CONFIG_FILE ]);
++        command_success_from_args([ "mkdir", "-p", "/etc/sing-box", "/usr/share/sing-box" ]);
++        log_message("Created missing sing-box UCI sidecar configuration", "info");
++    }
++
+     if (uci_core.exists("sing-box.main"))
+         return true;
+     return uci_core.set_section("sing-box.main", "sing-box");
+diff --git a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+index 6e90aba..fc91bc0 100644
+--- a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
++++ b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+@@ -351,7 +351,7 @@ const EntryPoint = {
+     };
+     const forkopMap = new form.Map(
+       UCI_PACKAGE,
+-      _("Forkop Settings"),
++      "Forkop MOD+ · Cudy TR3000 FixPack v1.0-stable",
+       _("Configuration for Forkop service"),
+     );
+     forkopMap.tabbed = true;
+diff --git a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+index 7c71585..63b55d9 100644
+--- a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
++++ b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+@@ -5392,7 +5392,7 @@ var LOG_WATCHER_INTERVAL_MS = 1e4;
+ var LOG_WATCHER_START_DELAY_MS = 5e3;
+ function componentDisplayName(component) {
+   const names = {
+-    forkop: "Forkop-Mod",
++    forkop: "Forkop MOD+",
+     sing_box: "sing-box",
+     zapret: "Zapret",
+     zapret2: "Zapret2",
+@@ -11038,9 +11038,13 @@ function renderDiagnosticSystemInfoWidget() {
+   const container = document.getElementById("fkp_diagnostic-page-system-info");
+   const items = [
+     {
+-      key: "Forkop-Mod",
++      key: "Forkop MOD+",
+       value: normalizeCompiledVersion(diagnosticsSystemInfo.forkop_version)
+     },
++    {
++      key: "Cudy FixPack",
++      value: "v1.0-stable"
++    },
+     {
+       key: "Luci App",
+       value: normalizeCompiledVersion(FORKOP_LUCI_APP_VERSION)
+@@ -14961,7 +14965,7 @@ function getComponentCards() {
+     {
+       component: "forkop",
+       column: 0,
+-      title: "Forkop-Mod",
++      title: "Forkop MOD+",
+       version: systemInfoLoading ? _("Loading...") : normalizeCompiledVersion(systemInfo.forkop_version),
+       latestVersion: getLatestVersion("forkop"),
+       releaseUrl: getGitHubReleaseUrl("forkop"),
