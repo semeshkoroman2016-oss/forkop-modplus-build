@@ -28,6 +28,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y fakeroot file gcc git make patch perl zstd curl util-linux
 
+      - name: Enable unprivileged user namespaces for APK build
+        run: |
+          set -euxo pipefail
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare -r true
+
       - name: Checkout frozen Forkop MOD 1.0.7 source
         run: |
           set -euxo pipefail
