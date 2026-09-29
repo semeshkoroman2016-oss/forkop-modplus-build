@@ -1,0 +1,21 @@
+diff --git a/forkop/files/usr/lib/components/updates.uc b/forkop/files/usr/lib/components/updates.uc
+--- a/forkop/files/usr/lib/components/updates.uc
++++ b/forkop/files/usr/lib/components/updates.uc
+@@ -3029,6 +3029,18 @@ function run_list_cache_persist() {
+     try { fs.writefile(LIST_CACHE_JOB_OUTCOME, (ok ? "ok" : "fail") + "\n"); } catch (e) { }
+     try { fs.unlink(LIST_CACHE_JOB_PID); } catch (e2) { }
+     log_message(ok ? "List cache download finished" : "List cache download finished with errors", ok ? "info" : "warn");
++
++    /* Forkop MOD+ Cudy FIX-03: on a clean install the asynchronous cache
++     * download can finish before any list_update has populated the runtime
++     * nft sets.  Apply selected nft-backed community lists once after the
++     * first successful cache download.  LIST_UPDATE_STATE_FILE prevents this
++     * from running on every later cache refresh. */
++    if (ok && !file_nonempty(LIST_UPDATE_STATE_FILE) &&
++        service_state_success([ "has-nft-list-update-sources" ])) {
++        log_message("Forkop MOD+ Cudy FIX-03: applying community lists after initial cache download", "info");
++        list_update();
++    }
++
+     exit(ok ? 0 : 1);
+ }
