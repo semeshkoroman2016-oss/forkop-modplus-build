@@ -1,15 +1,10 @@
 name: Build Forkop MOD+ APK
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
-    inputs:
-      platform:
-        description: Target platform
-        required: true
-        type: choice
-        options:
-          - cudy-tr3000
-          - orangepi-r1-plus-lts
 
 permissions:
   contents: read
@@ -17,6 +12,12 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - cudy-tr3000
+          - orangepi-r1-plus-lts
 
     steps:
       - name: Checkout build repository
@@ -38,7 +39,7 @@ jobs:
       - name: Apply platform patchset
         run: |
           set -euxo pipefail
-          case "${{ inputs.platform }}" in
+          case "${{ matrix.platform }}" in
             cudy-tr3000)
               PATCH_FILE="$GITHUB_WORKSPACE/patches/cudy-tr3000.patch"
               ;;
@@ -56,7 +57,7 @@ jobs:
         run: |
           set -euxo pipefail
           grep -q 'spider_x' src/forkop/files/usr/lib/singbox/generator.uc
-          case "${{ inputs.platform }}" in
+          case "${{ matrix.platform }}" in
             cudy-tr3000)
               grep -q 'mark-pending-reload' src/forkop/files/usr/lib/components/updates.uc
               grep -q 'Cudy FixPack' src/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
@@ -84,7 +85,7 @@ jobs:
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: forkop-modplus-${{ inputs.platform }}-1.0.7-packages
+          name: forkop-modplus-${{ matrix.platform }}-1.0.7-packages
           path: |
             src/dist/modplus-apk/*.apk
             src/dist/modplus-apk/*.ipk
