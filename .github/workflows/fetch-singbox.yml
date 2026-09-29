@@ -1,0 +1,32 @@
+name: Fetch frozen sing-box payload
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download exact tested sing-box compressed asset
+        run: |
+          set -euxo pipefail
+          URL="https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.1-extended-2.7.2/sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz"
+          FILE="sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz"
+          curl -fL --retry 3 -o "$FILE" "$URL"
+          echo "b22d044c44922068d57a17edb69d84befae527bdf41b4851e56f7f5daed1d452  $FILE" > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Upload frozen sing-box
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed
+          path: |
+            sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
