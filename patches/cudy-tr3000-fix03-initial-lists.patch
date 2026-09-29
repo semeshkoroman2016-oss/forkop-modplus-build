@@ -1,7 +1,8 @@
 diff --git a/forkop/files/usr/lib/components/updates.uc b/forkop/files/usr/lib/components/updates.uc
+index e5f9be1..a6cea3f 100644
 --- a/forkop/files/usr/lib/components/updates.uc
 +++ b/forkop/files/usr/lib/components/updates.uc
-@@ -3029,6 +3029,18 @@ function run_list_cache_persist() {
+@@ -3029,5 +3029,17 @@ function run_list_cache_persist() {
      try { fs.writefile(LIST_CACHE_JOB_OUTCOME, (ok ? "ok" : "fail") + "\n"); } catch (e) { }
      try { fs.unlink(LIST_CACHE_JOB_PID); } catch (e2) { }
      log_message(ok ? "List cache download finished" : "List cache download finished with errors", ok ? "info" : "warn");
