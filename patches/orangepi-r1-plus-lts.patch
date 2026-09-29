@@ -1,0 +1,323 @@
+diff --git a/b/forkop/files/usr/lib/forkop/community-cidr-sync.sh b/b/forkop/files/usr/lib/forkop/community-cidr-sync.sh
+new file mode 100755
+index 0000000..bcceddf
+--- /dev/null
++++ b/b/forkop/files/usr/lib/forkop/community-cidr-sync.sh
+@@ -0,0 +1,216 @@
++#!/bin/sh
++set -u
++
++TABLE="ForkopTable"
++CONFIG="/etc/sing-box/config.json"
++RULESETS="/usr/lib/forkop/routing/rulesets.uc"
++ENUM="/usr/lib/forkop/community-ruleset-enum.uc"
++CACHE="/tmp/forkop-mod-cidr-cache"
++LOCK="/var/run/forkop-mod-cidr-sync.lock"
++LOGTAG="forkop-mod-cidr"
++MARKER_SET="forkop_mod_cidr_ready"
++
++log(){ logger -t "$LOGTAG" "$*" 2>/dev/null || true; printf '%s\n' "$*"; }
++
++[ -f "$CONFIG" ] || exit 0
++nft list table inet "$TABLE" >/dev/null 2>&1 || exit 0
++[ -x "$ENUM" ] || exit 0
++[ -f "$RULESETS" ] || exit 0
++
++if ! mkdir "$LOCK" 2>/dev/null; then
++    exit 0
++fi
++trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
++
++mkdir -p "$CACHE"
++
++SECTIONS="$(
++    nft list table inet "$TABLE" 2>/dev/null |
++    sed -n 's/^[[:space:]]*set forkop_rule_\(.*\)_subnets[[:space:]]*{.*/\1/p'
++)"
++[ -n "$SECTIONS" ] || exit 0
++
++find_section_for_tag() {
++    tag="$1"
++    best=""
++    for sec in $SECTIONS; do
++        case "$tag" in
++            "$sec"-*)
++                if [ ${#sec} -gt ${#best} ]; then
++                    best="$sec"
++                fi
++                ;;
++        esac
++    done
++    printf '%s' "$best"
++}
++
++safe_name() {
++    printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '_'
++}
++
++split_family() {
++    src="$1"
++    v4="$2"
++    v6="$3"
++    : > "$v4"
++    : > "$v6"
++    [ -s "$src" ] || return 0
++    while IFS= read -r line; do
++        [ -n "$line" ] || continue
++        case "$line" in
++            *:*) printf '%s\n' "$line" >> "$v6" ;;
++            *)   printf '%s\n' "$line" >> "$v4" ;;
++        esac
++    done < "$src"
++}
++
++add_file_to_set() {
++    setname="$1"
++    file="$2"
++    [ -s "$file" ] || return 0
++    nft list set inet "$TABLE" "$setname" >/dev/null 2>&1 || return 0
++
++    nf="/tmp/${LOGTAG}-${setname}.$$.nft"
++    {
++        printf 'add element inet %s %s { ' "$TABLE" "$setname"
++        awk 'BEGIN{first=1} NF {
++            if (!first) printf ", "
++            printf "%s", $0
++            first=0
++        } END{print " }"}' "$file"
++    } > "$nf"
++
++    if nft -f "$nf" >/dev/null 2>&1; then
++        rm -f "$nf"
++        return 0
++    fi
++    rm -f "$nf"
++
++    while IFS= read -r elem; do
++        [ -n "$elem" ] || continue
++        nft add element inet "$TABLE" "$setname" "{ $elem }" >/dev/null 2>&1 || true
++    done < "$file"
++}
++
++ENUM_OUT="$CACHE/enumerated.tsv"
++"$ENUM" "$CONFIG" > "$ENUM_OUT" 2>/dev/null || exit 0
++[ -s "$ENUM_OUT" ] || exit 0
++
++SIG_SRC="$CACHE/signature.src"
++{
++    md5sum "$CONFIG" 2>/dev/null || true
++    while IFS="$(printf '\t')" read -r tag format kind location; do
++        printf '%s\t%s\t%s\t%s\n' "$tag" "$format" "$kind" "$location"
++        if [ "$kind" = "local" ] && [ -f "$location" ]; then
++            md5sum "$location" 2>/dev/null || true
++        fi
++    done < "$ENUM_OUT"
++} > "$SIG_SRC"
++
++newsig="$(md5sum "$SIG_SRC" 2>/dev/null | awk '{print $1}')"
++oldsig="$(cat "$CACHE/signature.md5" 2>/dev/null || true)"
++
++# Fast path: unchanged rulesets + marker set still exists means ForkopTable
++# was not rebuilt since the last successful sync. Exit without touching
++# hundreds of nft elements.
++if [ "$newsig" = "$oldsig" ] && [ -f "$CACHE/.ready" ] &&    nft list set inet "$TABLE" "$MARKER_SET" >/dev/null 2>&1; then
++    exit 0
++fi
++
++if [ "$newsig" != "$oldsig" ] || [ ! -f "$CACHE/.ready" ]; then
++    rm -f "$CACHE"/*.cidr "$CACHE"/*.scoped "$CACHE"/*.json           "$CACHE"/*.raw "$CACHE"/*.v4 "$CACHE"/*.v6           "$CACHE"/*.scoped4 "$CACHE"/*.scoped6           "$CACHE"/section-* "$CACHE/sections" 2>/dev/null || true
++    : > "$CACHE/sections"
++
++    while IFS="$(printf '\t')" read -r tag format kind location; do
++        [ -n "$tag" ] || continue
++        section="$(find_section_for_tag "$tag")"
++        [ -n "$section" ] || continue
++
++        key="$(safe_name "$tag")"
++        raw="$CACHE/$key.raw"
++        js="$CACHE/$key.json"
++        cidr="$CACHE/$key.cidr"
++        scoped="$CACHE/$key.scoped"
++
++        case "$kind:$format" in
++            local:binary)
++                [ -f "$location" ] || { log "WARN local ruleset missing: $tag -> $location"; continue; }
++                if ! sing-box rule-set decompile "$location" -o "$js" >/dev/null 2>&1; then
++                    log "WARN decompile failed: $tag"
++                    continue
++                fi
++                ;;
++            local:source)
++                [ -f "$location" ] || { log "WARN local source missing: $tag -> $location"; continue; }
++                cp "$location" "$js" || continue
++                ;;
++            *:binary)
++                if ! curl -fL --connect-timeout 10 --max-time 90 --retry 2                     -A "Forkop-MOD+-CIDR/2" "$location" -o "$raw" >/dev/null 2>&1; then
++                    log "WARN download failed: $tag"
++                    continue
++                fi
++                if ! sing-box rule-set decompile "$raw" -o "$js" >/dev/null 2>&1; then
++                    log "WARN decompile failed: $tag"
++                    continue
++                fi
++                ;;
++            *:source)
++                if ! curl -fL --connect-timeout 10 --max-time 90 --retry 2                     -A "Forkop-MOD+-CIDR/2" "$location" -o "$js" >/dev/null 2>&1; then
++                    log "WARN source download failed: $tag"
++                    continue
++                fi
++                ;;
++            *)
++                continue
++                ;;
++        esac
++
++        if ! ucode -L /usr/lib/forkop "$RULESETS"             extract-ip-cidr-nft "$js" "$cidr" "$scoped" '[]' '[]' >/dev/null 2>&1; then
++            log "WARN CIDR extraction failed: $tag"
++            continue
++        fi
++
++        split_family "$cidr" "$CACHE/$key.v4" "$CACHE/$key.v6"
++        split_family "$scoped" "$CACHE/$key.scoped4" "$CACHE/$key.scoped6"
++
++        printf '%s\t%s\n' "$section" "$key" >> "$CACHE/sections"
++    done < "$ENUM_OUT"
++
++    printf '%s\n' "$newsig" > "$CACHE/signature.md5"
++    touch "$CACHE/.ready"
++fi
++
++[ -s "$CACHE/sections" ] || exit 0
++
++for section in $(awk -F '\t' '{print $1}' "$CACHE/sections" | sort -u); do
++    out4="$CACHE/section-${section}.v4"
++    out6="$CACHE/section-${section}.v6"
++    outp4="$CACHE/section-${section}.p4"
++    outp6="$CACHE/section-${section}.p6"
++    : > "$out4"; : > "$out6"; : > "$outp4"; : > "$outp6"
++
++    awk -F '\t' -v s="$section" '$1==s{print $2}' "$CACHE/sections" |
++    while IFS= read -r key; do
++        [ -f "$CACHE/$key.v4" ] && cat "$CACHE/$key.v4" >> "$out4"
++        [ -f "$CACHE/$key.v6" ] && cat "$CACHE/$key.v6" >> "$out6"
++        [ -f "$CACHE/$key.scoped4" ] && cat "$CACHE/$key.scoped4" >> "$outp4"
++        [ -f "$CACHE/$key.scoped6" ] && cat "$CACHE/$key.scoped6" >> "$outp6"
++    done
++
++    for sf in "$out4" "$out6" "$outp4" "$outp6"; do
++        st="${sf}.sorted"
++        sort -u "$sf" > "$st" && mv "$st" "$sf"
++    done
++
++    add_file_to_set "forkop_rule_${section}_subnets" "$out4"
++    add_file_to_set "forkop_rule_${section}_subnets6" "$out6"
++    add_file_to_set "forkop_rule_${section}_ip_ports" "$outp4"
++    add_file_to_set "forkop_rule_${section}_ip6_ports" "$outp6"
++done
++
++# Marker exists only in the current ForkopTable generation.
++# Forkop table rebuild removes it, which makes the next cron run repopulate CIDRs.
++nft list set inet "$TABLE" "$MARKER_SET" >/dev/null 2>&1 ||     nft add set inet "$TABLE" "$MARKER_SET" '{ type ipv4_addr; }' >/dev/null 2>&1 || true
++
++exit 0
+diff --git a/b/forkop/files/usr/lib/forkop/community-ruleset-enum.uc b/b/forkop/files/usr/lib/forkop/community-ruleset-enum.uc
+new file mode 100755
+index 0000000..9f6ed37
+--- /dev/null
++++ b/b/forkop/files/usr/lib/forkop/community-ruleset-enum.uc
+@@ -0,0 +1,43 @@
++#!/usr/bin/env ucode
++let fs = require("fs");
++
++function s(v) { return v == null ? "" : "" + v; }
++
++let path = ARGV[0] || "/etc/sing-box/config.json";
++let raw = fs.readfile(path);
++if (raw == null)
++    exit(1);
++
++let cfg;
++try {
++    cfg = json(raw);
++}
++catch (e) {
++    exit(2);
++}
++
++let route = type(cfg.route) == "object" ? cfg.route : {};
++let sets = type(route.rule_set) == "array" ? route.rule_set : [];
++
++for (let rs in sets) {
++    if (type(rs) != "object")
++        continue;
++
++    let tag = s(rs.tag);
++    let format = s(rs.format);
++    let kind = s(rs.type);
++    let location = "";
++
++    if (kind == "local")
++        location = s(rs.path);
++    else
++        location = s(rs.url);
++
++    if (tag == "" || location == "")
++        continue;
++
++    if (format == "")
++        format = match(location, /\.srs([?#].*)?$/) ? "binary" : "source";
++
++    printf("%s\t%s\t%s\t%s\n", tag, format, kind, location);
++}
+diff --git a/a/forkop/files/usr/lib/singbox/generator.uc b/b/forkop/files/usr/lib/singbox/generator.uc
+index 520fa41..36802f1 100644
+--- a/a/forkop/files/usr/lib/singbox/generator.uc
++++ b/b/forkop/files/usr/lib/singbox/generator.uc
+@@ -894,6 +894,19 @@ function add_subscription_source_with_state(config, section, source_index, sourc
+         return 0;
+ 
+     let source_outbounds = runtime_subscription.read_source_outbounds(source_section);
++
++    /* Forkop MOD+ FIX-01: strip Xray-only Reality fields before sing-box validation. */
++    for (let source_outbound in source_outbounds) {
++        if (type(source_outbound) != "object")
++            continue;
++        if (type(source_outbound.tls) != "object")
++            continue;
++        if (type(source_outbound.tls.reality) != "object")
++            continue;
++
++        delete source_outbound.tls.reality.spider_x;
++        delete source_outbound.tls.reality.spiderX;
++    }
+     if (length(source_outbounds) == 0)
+         return 0;
+ 
+diff --git a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+index 6e90aba..657128e 100644
+--- a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
++++ b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+@@ -351,7 +351,7 @@ const EntryPoint = {
+     };
+     const forkopMap = new form.Map(
+       UCI_PACKAGE,
+-      _("Forkop Settings"),
++      "Настройки Forkop MOD+ · FixPack v1.0",
+       _("Configuration for Forkop service"),
+     );
+     forkopMap.tabbed = true;
+diff --git a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+index 7c71585..cd6d7b5 100644
+--- a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
++++ b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+@@ -11041,6 +11041,10 @@ function renderDiagnosticSystemInfoWidget() {
+       key: "Forkop-Mod",
+       value: normalizeCompiledVersion(diagnosticsSystemInfo.forkop_version)
+     },
++    {
++      key: "FixPack",
++      value: "v1.0"
++    },
+     {
+       key: "Luci App",
+       value: normalizeCompiledVersion(FORKOP_LUCI_APP_VERSION)
