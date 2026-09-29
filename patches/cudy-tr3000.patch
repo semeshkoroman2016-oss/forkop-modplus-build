@@ -1,0 +1,87 @@
+diff --git a/a/forkop/files/usr/lib/components/updates.uc b/b/forkop/files/usr/lib/components/updates.uc
+index 0824b82..e5f9be1 100644
+--- a/a/forkop/files/usr/lib/components/updates.uc
++++ b/b/forkop/files/usr/lib/components/updates.uc
+@@ -2532,7 +2532,7 @@ function list_update() {
+             if (!persist_result.ok)
+                 ok = false;
+             if (persist_result.changed) {
+-                mark_pending_reload("local_list_cache");
++                service_state_success([ "mark-pending-reload", PENDING_RELOAD_FILE, "local_list_cache" ]);
+             }
+         }
+         else if (!persist_result) {
+diff --git a/a/forkop/files/usr/lib/singbox/generator.uc b/b/forkop/files/usr/lib/singbox/generator.uc
+index 520fa41..e30080f 100644
+--- a/a/forkop/files/usr/lib/singbox/generator.uc
++++ b/b/forkop/files/usr/lib/singbox/generator.uc
+@@ -894,6 +894,19 @@ function add_subscription_source_with_state(config, section, source_index, sourc
+         return 0;
+ 
+     let source_outbounds = runtime_subscription.read_source_outbounds(source_section);
++
++    /* Forkop MOD+ Cudy TR3000 FIX-01: strip Xray-only Reality fields before sing-box validation. */
++    for (let source_outbound in source_outbounds) {
++        if (type(source_outbound) != "object")
++            continue;
++        if (type(source_outbound.tls) != "object")
++            continue;
++        if (type(source_outbound.tls.reality) != "object")
++            continue;
++
++        delete source_outbound.tls.reality.spider_x;
++        delete source_outbound.tls.reality.spiderX;
++    }
+     if (length(source_outbounds) == 0)
+         return 0;
+ 
+diff --git a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+index 6e90aba..fc91bc0 100644
+--- a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
++++ b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/forkop.js
+@@ -351,7 +351,7 @@ const EntryPoint = {
+     };
+     const forkopMap = new form.Map(
+       UCI_PACKAGE,
+-      _("Forkop Settings"),
++      "Forkop MOD+ · Cudy TR3000 FixPack v1.0-stable",
+       _("Configuration for Forkop service"),
+     );
+     forkopMap.tabbed = true;
+diff --git a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+index 7c71585..63b55d9 100644
+--- a/a/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
++++ b/b/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
+@@ -5392,7 +5392,7 @@ var LOG_WATCHER_INTERVAL_MS = 1e4;
+ var LOG_WATCHER_START_DELAY_MS = 5e3;
+ function componentDisplayName(component) {
+   const names = {
+-    forkop: "Forkop-Mod",
++    forkop: "Forkop MOD+",
+     sing_box: "sing-box",
+     zapret: "Zapret",
+     zapret2: "Zapret2",
+@@ -11038,9 +11038,13 @@ function renderDiagnosticSystemInfoWidget() {
+   const container = document.getElementById("fkp_diagnostic-page-system-info");
+   const items = [
+     {
+-      key: "Forkop-Mod",
++      key: "Forkop MOD+",
+       value: normalizeCompiledVersion(diagnosticsSystemInfo.forkop_version)
+     },
++    {
++      key: "Cudy FixPack",
++      value: "v1.0-stable"
++    },
+     {
+       key: "Luci App",
+       value: normalizeCompiledVersion(FORKOP_LUCI_APP_VERSION)
+@@ -14961,7 +14965,7 @@ function getComponentCards() {
+     {
+       component: "forkop",
+       column: 0,
+-      title: "Forkop-Mod",
++      title: "Forkop MOD+",
+       version: systemInfoLoading ? _("Loading...") : normalizeCompiledVersion(systemInfo.forkop_version),
+       latestVersion: getLatestVersion("forkop"),
+       releaseUrl: getGitHubReleaseUrl("forkop"),
