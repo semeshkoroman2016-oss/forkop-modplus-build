@@ -13,20 +13,30 @@ jobs:
   fetch:
     runs-on: ubuntu-24.04
     steps:
-      - name: Download exact tested sing-box compressed asset
+      - name: Download exact tested sing-box payloads
         run: |
           set -euxo pipefail
-          URL="https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.1-extended-2.7.2/sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz"
-          FILE="sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz"
-          curl -fL --retry 3 -o "$FILE" "$URL"
-          echo "b22d044c44922068d57a17edb69d84befae527bdf41b4851e56f7f5daed1d452  $FILE" > SHA256SUMS
+
+          COMPRESSED="sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz"
+          GENERIC_APK="sing-box-extended_1.14.1-extended-2.7.2_openwrt_aarch64_generic.apk"
+
+          curl -fL --retry 3             -o "$COMPRESSED"             "https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.1-extended-2.7.2/$COMPRESSED"
+
+          curl -fL --retry 3             -o "$GENERIC_APK"             "https://github.com/shtorm-7/sing-box-extended/releases/download/v1.14.1-extended-2.7.2/$GENERIC_APK"
+
+          cat > SHA256SUMS <<'EOF'
+b22d044c44922068d57a17edb69d84befae527bdf41b4851e56f7f5daed1d452  sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz
+c781804fda86978dc1527a4288d318ed6ed5e1768c2dbc0bd80ac7e5c5f19488  sing-box-extended_1.14.1-extended-2.7.2_openwrt_aarch64_generic.apk
+EOF
+
           sha256sum -c SHA256SUMS
 
-      - name: Upload frozen sing-box
+      - name: Upload frozen sing-box payloads
         uses: actions/upload-artifact@v4
         with:
-          name: sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed
+          name: sing-box-1.14.1-extended-2.7.2-frozen-payloads
           path: |
             sing-box-1.14.1-extended-2.7.2-linux-arm64-compressed.tar.gz
+            sing-box-extended_1.14.1-extended-2.7.2_openwrt_aarch64_generic.apk
             SHA256SUMS
           if-no-files-found: error
