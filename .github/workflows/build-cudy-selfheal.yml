@@ -5,6 +5,7 @@ on:
     branches: [ main ]
     paths:
       - "patches/cudy-tr3000-selfheal.patch"
+      - "patches/cudy-tr3000-fix03-initial-lists.patch"
       - ".github/workflows/build-cudy-selfheal.yml"
   workflow_dispatch:
 
@@ -21,12 +22,14 @@ jobs:
           cd src
           git checkout a2810b4da3e75775ac05778e7e53f57804b3e60c
           git apply ../patches/cudy-tr3000-selfheal.patch
+          git apply ../patches/cudy-tr3000-fix03-initial-lists.patch
 
       - name: Verify MOD+ fixes in source
         run: |
           grep -F "Forkop MOD+ Cudy FIX-00" src/forkop/files/usr/lib/singbox/runtime.uc
           grep -F "Forkop MOD+ Cudy TR3000 FIX-01" src/forkop/files/usr/lib/singbox/generator.uc
           grep -F 'service_state_success([ "mark-pending-reload", PENDING_RELOAD_FILE, "local_list_cache" ])' src/forkop/files/usr/lib/components/updates.uc
+          grep -F "Forkop MOD+ Cudy FIX-03" src/forkop/files/usr/lib/components/updates.uc
           grep -F "Forkop MOD+" src/luci-app-forkop/htdocs/luci-static/resources/view/forkop/main.js
 
       - name: Install host dependencies
@@ -54,7 +57,7 @@ jobs:
       - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: forkop-modplus-cudy-1.0.7-selfheal
+          name: forkop-modplus-cudy-1.0.7-selfheal-fix03
           path: |
             src/dist/cudy-selfheal/*.apk
             src/dist/cudy-selfheal/*.ipk
